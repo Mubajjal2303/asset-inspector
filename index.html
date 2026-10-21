@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Asset & Mesh Inspector</title>
+  <!-- Three.js Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #0f0f15;
+      --panel-bg: rgba(22, 22, 32, 0.85);
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .app-container {
+      display: flex;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    .sidebar {
+      width: 320px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(12px);
+      padding: 24px;
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      z-index: 10;
+    }
+
+    .sidebar h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .control-group {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+    }
+
+    .control-group label {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .control-group input[type="color"] {
+      border: none;
+      width: 36px;
+      height: 24px;
+      border-radius: 4px;
+      cursor: pointer;
+      background: transparent;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .btn:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .info-panel {
+      margin-top: auto;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .viewport-container {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .viewport-container.drag-active {
+      outline: 3px dashed var(--accent);
+      outline-offset: -10px;
+      background-color: rgba(99, 102, 241, 0.05);
+    }
+
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    .overlay-notice {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      padding: 16px 28px;
+      border: 2px dashed rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <h2>Asset Inspector</h2>
+      
+      <div class="control-group">
+        <label for="wireframe-toggle">Wireframe Mode</label>
+        <input type="checkbox" id="wireframe-toggle">
+      </div>
+
+      <div class="control-group">
+        <label for="autorotate-toggle">Auto-Rotate Model</label>
+        <input type="checkbox" id="autorotate-toggle">
+      </div>
+
+      <div class="control-group">
+        <label for="rim-light-toggle">Studio Rim Light</label>
+        <input type="checkbox" id="rim-light-toggle" checked>
+      </div>
+
+      <div class="control-group">
+        <label for="bg-color">Environment Color</label>
+        <input type="color" id="bg-color" value="#1a1a24">
+      </div>
+
+      <button class="btn" id="reset-camera-btn">Reset Camera View</button>
+
+      <div id="file-info" class="info-panel">
+        <p>Drop a 3D file (.gltf / .glb) to inspect</p>
+      </div>
+    </aside>
+
+    <main class="viewport-container" id="drop-zone">
+      <div id="canvas-container"></div>
+      <div class="overlay-notice" id="drop-notice">
+        <span>Drag & Drop 3D File Here</span>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // --- 1. CORE SETUP ---
+    const container = document.getElementById('canvas-container');
+    const fileInfoPanel = document.getElementById('file-info');
+
+    let scene, camera, renderer, controls;
+    let currentModel = null;
+    let isAutoRotating = false;
+    let gridHelper, rimLight;
+
+    function initScene() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x1a1a24);
+
+      camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+      camera.position.set(5, 5, 5);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      renderer.setPixelRatio(window.devicePixelRatio);
+      container.appendChild(renderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+
+      // Lights
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+
+      const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      mainLight.position.set(10, 20, 15);
+      scene.add(mainLight);
+
+      // Artificial Studio Rim Light
+      rimLight = new THREE.DirectionalLight(0x818cf8, 1.5);
+      rimLight.position.set(-10, 10, -10);
+      scene.add(rimLight);
+
+      // Initial Grid
+      updateGridColors(scene.background);
+
+      window.addEventListener('resize', onWindowResize);
+      animate();
+    }
+
+    function updateGridColors(bgColor) {
+      if (gridHelper) scene.remove(gridHelper);
+
+      // Compute matching grid tones based on background luminance/color
+      const hsl = {};
+      bgColor.getHSL(hsl);
+      
+      // Create subtle matching grid lines
+      const centerLineColor = new THREE.Color().setHSL(hsl.h, Math.min(hsl.s + 0.2, 1), Math.max(hsl.l + 0.25, 0.3));
+      const gridLineColor = new THREE.Color().setHSL(hsl.h, Math.max(hsl.s - 0.1, 0), Math.max(hsl.l + 0.08, 0.18));
+
+      gridHelper = new THREE.GridHelper(10, 10, centerLineColor, gridLineColor);
+      gridHelper.position.y = -1;
+      scene.add(gridHelper);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (isAutoRotating && currentModel) {
+        currentModel.rotation.y += 0.005;
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // --- 2. UI LISTENERS ---
+    document.getElementById('wireframe-toggle').addEventListener('change', (e) => {
+      const isWireframe = e.target.checked;
+      if (currentModel) {
+        currentModel.traverse((child) => {
+          if (child.isMesh) child.material.wireframe = isWireframe;
+        });
+      }
+    });
+
+    document.getElementById('autorotate-toggle').addEventListener('change', (e) => {
+      isAutoRotating = e.target.checked;
+    });
+
+    document.getElementById('rim-light-toggle').addEventListener('change', (e) => {
+      rimLight.visible = e.target.checked;
+    });
+
+    document.getElementById('bg-color').addEventListener('input', (e) => {
+      const newColor = new THREE.Color(e.target.value);
+      scene.background = newColor;
+      updateGridColors(newColor);
+    });
+
+    document.getElementById('reset-camera-btn').addEventListener('click', () => {
+      camera.position.set(5, 5, 5);
+      controls.target.set(0, 0, 0);
+      controls.update();
+    });
+
+    // --- 3. DRAG AND DROP ---
+    const dropZone = document.getElementById('drop-zone');
+    const dropNotice = document.getElementById('drop-notice');
+
+    ['dragenter', 'dragover'].forEach(name => {
+      dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.add('drag-active'); });
+    });
+    ['dragleave', 'drop'].forEach(name => {
+      dropZone.addEventListener(name, (e) => { e.preventDefault(); dropZone.classList.remove('drag-active'); });
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+      if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+    });
+
+    function handleFile(file) {
+      const name = file.name.toLowerCase();
+      if (!name.endsWith('.gltf') && !name.endsWith('.glb')) {
+        alert('Please drop a valid .gltf or .glb 3D asset file.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.readAsArrayBuffer(file);
+      reader.onload = function (e) {
+        new THREE.GLTFLoader().parse(e.target.result, '', (gltf) => {
+          if (currentModel) scene.remove(currentModel);
+          currentModel = gltf.scene;
+
+          const box = new THREE.Box3().setFromObject(currentModel);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+
+          currentModel.position.sub(center);
+          const maxDim = Math.max(size.x, size.y, size.z);
+          const scale = 4 / maxDim;
+          currentModel.scale.set(scale, scale, scale);
+
+          scene.add(currentModel);
+          dropNotice.style.display = 'none';
+
+          let meshCount = 0, polyCount = 0;
+          currentModel.traverse((child) => {
+            if (child.isMesh) {
+              meshCount++;
+              polyCount += child.geometry.attributes.position.count / 3;
+            }
+          });
+
+          fileInfoPanel.innerHTML = `
+            <strong>Asset:</strong> ${file.name}<br>
+            <strong>Size:</strong> ${(file.size / 1024 / 1024).toFixed(2)} MB<br>
+            <strong>Meshes:</strong> ${meshCount}<br>
+            <strong>Polygons:</strong> ${Math.round(polyCount).toLocaleString()}
+          `;
+        });
+      };
+    }
+
+    initScene();
+  </script>
+</body>
+</html>
